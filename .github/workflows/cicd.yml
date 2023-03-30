@@ -1,7 +1,9 @@
 name: workflow
 on:
   push:
-    branches: [ main, release ]
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ release ]
   workflow_dispatch:
 
 jobs:
@@ -20,22 +22,29 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run Tests
-      run: |
-        python ./router/hello.py test
-    - uses: actions/checkout@v2
-      with:
-         fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-    - name: SonarCloud Scan
-      uses: SonarSource/sonarcloud-github-action@master
-      env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-    
+  test:
+    name: testing the code
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run Tests
+        run: |
+          python ./test/hello.py test
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
+            SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   DeployDev:
     name: Deploy to Dev 
-    if: github.event.ref == 'refs/heads/main'
-    needs: [Build]
+    if: |
+     github.event.ref == 'refs/heads/dev'
+    needs: [build , test  ]
     runs-on: ubuntu-latest
     environment: 
       name: Dev
@@ -63,17 +72,21 @@ jobs:
             fail-build: false
       - uses: actions/checkout@master
       - name: Publish to Registry
-        uses: elgohr/Publish-Docker-Github-Action@master
+        uses: elgohr/Publish-Docker-Github-Action@v5
         with:
           name: rupesh1050/rupeshaccern
           username: ${{ secrets.DOCKER_NAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
           dockerfile: Dockerfile
-          tag_with_ref: registry
+          tag_with_ref: 'refs/*'
+          labels: ${{ steps.meta.outputs.labels }}
           
   DeployTest:
     name: Deploy to Test 
-    needs: [DeployDev]
+    if: |
+     github.event.ref == 'refs/heads/main' ||
+     github.event.ref == 'refs/heads/release' 
+    needs: [build , test ]
     runs-on: ubuntu-latest
     environment: 
       name: Staging
@@ -96,6 +109,9 @@ jobs:
       
   DeployStaging:
     name: Deploy to Staging 
+    if: |
+     github.event.ref == 'refs/heads/main' ||
+     github.event.ref == 'refs/heads/release' 
     needs: [DeployTest]
     runs-on: ubuntu-latest
     environment: 
@@ -137,13 +153,12 @@ jobs:
             fail-build: false
       - uses: actions/checkout@master
       - name: Publish to Registry
-        uses: elgohr/Publish-Docker-Github-Action@master
+        uses: elgohr/Publish-Docker-Github-Action@v5
         with:
           name: rupesh1050/cicd-workflow
           username: ${{ secrets.DOCKER_NAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
           dockerfile: Dockerfile
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
